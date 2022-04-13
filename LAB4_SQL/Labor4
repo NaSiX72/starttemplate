@@ -1,0 +1,147 @@
+select * from tag; -- Listázzuk ki a könyvtár tagjait!
+
+select distinct tag.vezeteknev, tag.keresztnev, k.cim -- Listázza ki, hogy az egyes tagok eddig milyen könyveket kölcsönöztek ki!
+from tag
+inner join kolcsonzesek kcs on kcs.tagid = tag.id
+    inner join konyv k on k.isbn = kcs.konyvisbn;
+
+select distinct concat(tag.vezeteknev, ' ', tag.keresztnev) as 'tag neve', -- Listázza ki, hogy az egyes tagok milyen szerzők könyveit kölcsönözték ki!
+concat(sz.vezeteknev, ' ', sz.keresztnev) as 'szerzo neve'
+from tag
+inner join kolcsonzesek kcs on kcs.tagid = tag.id
+    inner join konyv k on k.isbn = kcs.konyvisbn
+    inner join konyv_szerzo ksz on ksz.konyvisbn = k.isbn
+    inner join szerzo sz on sz.id = ksz.szerzoid;
+    
+-- Az egyes tagok hányszor kölcsönöztek eddig!
+select tag.id, tag.vezeteknev, tag.keresztnev, count(kcs.id)
+from tag
+	inner join kolcsonzesek kcs on kcs.tagid = tag.id
+where tag.tagsagiervenyes > curdate();
+   
+select * from tag;
+   
+select tag.id, tag.vezeteknev, tag.keresztnev, count(kcs.id) -- Akik eddig legalább 3-szor kölcsönöztek
+from tag
+inner join kolcsonzesek kcs on kcs.tagid = tag.id
+where tag.tagsagiervenyes > curdate()
+group by tag.id
+having count(kcs.id) >=3;
+
+select t.id, t.vezeteknev, t.keresztnev, max(kcs.kiviteldatum) -- Az egyes tagok mikor kölcsönöztek utoljára!
+from tag t
+inner join kolcsonzesek kcs on kcs.tagid = t.id
+group by t.id;
+
+select sz.*, count(kcs.id)
+from szerzo sz
+left outer join konyv_szerzo ksz on ksz.szerzoid = sz.id
+    inner join konyv k on k.isbn = ksz.konyvisbn
+    left outer join kolcsonzesek kcs on kcs.konyvisbn = k.isbn
+group by sz.id;
+
+select * -- Hagyjuk meg csak azokat, akiknek a tagságija érvényes!
+from tag
+where tag.tagsagiervenyes < curdate();
+
+select t.* -- Listázza ki azon tagokat akiknek már lejárt a kölcsönzése, de még nem hozta vissza a kikölcsönzött könyvet!
+from tag t
+inner join kolcsonzesek kcs on t.id = kcs.tagid
+where kcs.lejaratdatum < curdate() and kcs.visszahozataldatum is null;
+
+select sz.*
+from szerzo sz
+inner join konyv_szerzo on konyv_szerzo.szerzoid = sz.id
+where sz.id not in
+(
+select distinct ksz.szerzoid
+from konyv_szerzo ksz
+inner join kolcsonzesek kcs on kcs.konyvisbn = ksz.konyvisbn
+);
+
+select * -- Kik írták a legdrágább könyvet?
+from szerzo sz
+inner join konyv_szerzo ksz on ksz.szerzoid = sz.id
+    inner join konyv k on k.isbn = ksz.konyvisbn
+where k.ar = (select max(ar) from konyv);
+
+-- Listázza ki azokat a könyveket, melyek átlagban legalább 30 napig voltak kikölcsönözve!
+
+select k.isbn, k.cim, avg(datediff(kcs.visszahozataldatum, kcs.kiviteldatum)) -- a.)
+from konyv k
+	inner join kolcsonzesek kcs on kcs.konyvisbn = k.isbn
+group by k.isbn
+having avg(datediff(kcs.visszahozataldatum, kcs.kiviteldatum)) >=30;
+
+select k.isbn, k.cim, avg(datediff(ifnull(kcs.visszahozataldatum, curdate()), kcs.kiviteldatum)) -- b.)
+from konyv k
+	inner join kolcsonzesek kcs on kcs.konyvisbn = k.isbn
+group by k.isbn
+having avg(datediff(ifnull(kcs.visszahozataldatum, curdate()), kcs.kiviteldatum)) >=30;
+
+select t.* -- Listázza ki azokat a könyveket, melyek átlagban legalább 30 napig voltak kikölcsönözve!
+from tag t
+	inner join kolcsonzesek kcs on kcs.tagid = t.id
+where datediff(t.tagsagiervenyes, curdate()) < 100 and kcs.visszahozataldatum is null;
+
+select k.* -- Listázza ki a kikölcsönözhető könyveket (azaz épp bent vannak a könyvtárban)!
+from konyv k
+where k.isbn not in
+(
+select distinct konyvisbn
+from kolcsonzesek kcs
+where kcs.visszahozataldatum is null
+);
+
+-- Önálló rész:
+
+-- Listázza ki azokat könyveket, melyeket még nem kölcsönöztek ki soha!
+select distinct k.*
+from konyv k
+		left outer join kolcsonzesek kcs on k.isbn = kcs.konyvisbn
+where k.isbn not in
+(
+	select konyvisbn
+    from kolcsonzesek kcs
+);
+
+-- Melyik a legrégebbi könyv?
+select k.isbn, k.cim, k.megjelenes
+from konyv k
+where k.megjelenes in (select min(megjelenes) from konyv);
+
+-- Összesen hány napig volt kikölcsönözve a legrégebbi könyv?
+select sum(if(kcs.visszahozataldatum is null, datediff(curdate(),kcs.kiviteldatum),datediff(kcs.visszahozataldatum,kcs.kiviteldatum)))
+from kolcsonzesek kcs
+where kcs.konyvisbn = 
+(
+select k.isbn
+from konyv k
+where k.megjelenes in (select min(megjelenes) from konyv)
+);
+
+-- Melyik tag a leglustább, azaz ő késett a legtöbbet egy könyv visszahozatalával?
+select t.vezeteknev, t.keresztnev, kcs.lejaratdatum, kcs.visszahozataldatum -- max(if(kcs.visszahozataldatum is null, datediff(curdate(),kcs.lejaratdatum),datediff(kcs.visszahozataldatum,kcs.lejaratdatum)))
+from tag t, kolcsonzesek kcs
+where t.id = kcs.tagid and kcs.visszahozataldatum in (select max(kcs.visszahozataldatum) from kolcsonzesek);
+-- ezt sajnos nem tudtam megcsinálni :(
+
+-- Listázza ki azokat a könyveket, melyek összesen legalább 40 napig ki voltak kölcsönözve!
+select k.isbn, k.cim, datediff(kcs.visszahozataldatum, kcs.kiviteldatum)
+from konyv k
+	inner join kolcsonzesek kcs on k.isbn = kcs.konyvisbn
+where datediff(kcs.visszahozataldatum, kcs.kiviteldatum) >=40;
+
+-- Listázza ki, hogy az egyes könyveknek hány szerzője van!
+select k.cim, count(sz.id) as írók_száma
+from konyv k
+	inner join konyv_szerzo ksz on k.isbn = ksz.konyvisbn
+    inner join szerzo sz on ksz.szerzoid = sz.id
+group by k.isbn;
+
+-- Listázza ki az könyvek szerzőinek a számát nemzetiségek szerint!
+select k.cim, sz.nemzetiseg, count(sz.id) as írók_száma
+from konyv k
+	inner join konyv_szerzo ksz on k.isbn = ksz.konyvisbn
+    inner join szerzo sz on ksz.szerzoid = sz.id
+group by k.isbn, sz.nemzetiseg;
